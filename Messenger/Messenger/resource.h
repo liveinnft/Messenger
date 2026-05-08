@@ -1,0 +1,17 @@
+#ifndef IDC_STATIC
+#define IDC_STATIC (-1)
+#endif
+#define IDC_DLG_HOST 201
+#define IDC_DLG_PORT 202
+#define IDC_DLG_USER 203
+#define IDC_DLG_PASS 204
+#define IDC_DLG_REGISTER 205
+#define IDC_DLG_LOGIN_BTN 206
+#define IDD_LOGIN 102
+#define IDD_DEPLOY 103
+#define IDC_SSH_HOST 301
+#define IDC_SSH_PORT 302
+#define IDC_SSH_USER 303
+#define IDC_SSH_PASS 304
+#define IDC_SSH_LOG 305
+#define IDC_SSH_DEPLOY_BTN 306

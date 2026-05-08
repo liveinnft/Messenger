@@ -1,0 +1,37 @@
+﻿//{{NO_DEPENDENCIES}}
+#define IDS_APP_TITLE			103
+#define IDR_MAINFRAME			128
+#define IDD_MESSENGER_DIALOG	102
+#define IDD_ABOUTBOX			103
+#define IDM_ABOUT				104
+#define IDM_EXIT				105
+#define IDI_MESSENGER			107
+#define IDI_SMALL				108
+#define IDC_MESSENGER			109
+#define IDC_MYICON				2
+#ifndef IDC_STATIC
+#define IDC_STATIC				-1
+#endif
+#define IDD_LOGIN              102
+#define IDD_DEPLOY             103
+#define IDC_DLG_HOST 201
+#define IDC_DLG_PORT 202
+#define IDC_DLG_USER 203
+#define IDC_DLG_PASS 204
+#define IDC_DLG_REGISTER 205
+#define IDC_DLG_LOGIN_BTN 206
+#define IDC_SSH_HOST 301
+#define IDC_SSH_PORT 302
+#define IDC_SSH_USER 303
+#define IDC_SSH_PASS 304
+#define IDC_SSH_LOG 305
+#define IDC_SSH_DEPLOY_BTN 306
+#ifdef APSTUDIO_INVOKED
+#ifndef APSTUDIO_READONLY_SYMBOLS
+#define _APS_NO_MFC					130
+#define _APS_NEXT_RESOURCE_VALUE	129
+#define _APS_NEXT_COMMAND_VALUE		32771
+#define _APS_NEXT_CONTROL_VALUE		1000
+#define _APS_NEXT_SYMED_VALUE		110
+#endif
+#endif
