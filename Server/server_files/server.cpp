@@ -158,7 +158,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
         break;
     }
 
-    case Protocol::MSG: {
+    case Protocol::SEND_MSG: {
         if (parts.size() >= 4) {
             db->saveMessage(parts[1], parts[2], parts[3]);
             std::string response = Protocol::createMessage(Protocol::RESPONSE_OK, {});

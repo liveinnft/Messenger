@@ -30,6 +30,9 @@
     <ClInclude Include="network.h">
       <Filter>Файлы заголовков</Filter>
     </ClInclude>
+    <ClInclude Include="prototol.h">
+      <Filter>Файлы заголовков</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Messenger.cpp">

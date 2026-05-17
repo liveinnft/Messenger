@@ -54,7 +54,8 @@ bool NetworkClient::connectToServer(const std::string& host, int port) {
                 sock = INVALID_SOCKET;
                 return false;
             }
-        } else {
+        }
+        else {
             closesocket(sock);
             sock = INVALID_SOCKET;
             return false;

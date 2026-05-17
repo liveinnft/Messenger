@@ -9,7 +9,7 @@
 #include <algorithm>
 #include "network.h"
 #include "protocol.h"
-#include "ssh_deploy.h"
+// #include "ssh_deploy.h" // Отключено - не нужен libssh2
 #pragma comment(lib, "comctl32.lib")
 
 #define DT_WORD_ELL 0x00040000L
@@ -234,7 +234,8 @@ void drawMsgView(HDC dc, RECT rc) {
         if (m.isSelf) {
             brc.left = rc.right - bubbleW - 12;
             brc.right = rc.right - 12;
-        } else {
+        }
+        else {
             brc.left = rc.left + 12;
             brc.right = rc.left + bubbleW + 12;
         }
@@ -400,7 +401,7 @@ void sendMsg(const std::string& text) {
     args.push_back(g_currentUser);
     args.push_back(g_currentChat);
     args.push_back(text);
-    std::string r = Protocol::createMessage(Protocol::MSG, args);
+    std::string r = Protocol::createMessage(Protocol::SEND_MSG, args);
     if (g_net.sendMessage(r)) {
         ChatMsg m;
         m.sender = g_currentUser;
@@ -489,38 +490,29 @@ void doConnect(HWND hParent) {
 }
 INT_PTR CALLBACK DeployDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
     if (msg == WM_INITDIALOG) {
-        SetDlgItemText(hDlg, IDC_SSH_PORT, L"22");
-        SetDlgItemText(hDlg, IDC_SSH_USER, L"root");
-        g_hSshLog = GetDlgItem(hDlg, IDC_SSH_LOG);
-        SetFocus(GetDlgItem(hDlg, IDC_SSH_HOST));
+        // Показываем информацию о развертывании
+        HWND hLog = GetDlgItem(hDlg, IDC_SSH_LOG);
+        std::wstring info =
+            L"Для запуска сервера используйте один из способов:\r\n\r\n"
+            L"1. WSL (Windows Subsystem for Linux):\r\n"
+            L"   • PowerShell от админа: wsl --install\r\n"
+            L"   • Перезагрузка\r\n"
+            L"   • wsl\r\n"
+            L"   • cd ~/Server && ./install.sh\r\n\r\n"
+            L"2. VPS/облако:\r\n"
+            L"   • Скопируйте Server/ на сервер\r\n"
+            L"   • Запустите ./install.sh\r\n\r\n"
+            L"3. Docker:\r\n"
+            L"   • docker build -t msg-srv .\r\n"
+            L"   • docker run -p 8888:8888 msg-srv\r\n\r\n"
+            L"Подробнее: Server/README_SERVER.md\r\n";
+        SetWindowText(hLog, info.c_str());
+        SetFocus(GetDlgItem(hDlg, IDCANCEL));
         return 1;
     }
     if (msg == WM_COMMAND) {
-        if (LOWORD(wp) == IDCANCEL) { EndDialog(hDlg, IDCANCEL); return 1; }
-        if (LOWORD(wp) == IDC_SSH_DEPLOY_BTN) {
-            wchar_t b[512];
-            SshDeploy::Config cfg;
-            GetDlgItemText(hDlg, IDC_SSH_HOST, b, 512); cfg.host = w2s(b);
-            GetDlgItemText(hDlg, IDC_SSH_PORT, b, 512); cfg.port = _wtoi(b);
-            GetDlgItemText(hDlg, IDC_SSH_USER, b, 512); cfg.username = w2s(b);
-            GetDlgItemText(hDlg, IDC_SSH_PASS, b, 512); cfg.password = w2s(b);
-            if (cfg.host.empty()) { MessageBox(hDlg, L"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 IP \u0441\u0435\u0440\u0432\u0435\u0440\u0430", L"\u041e\u0448\u0438\u0431\u043a\u0430", MB_OK); return 1; }
-            SetWindowText(g_hSshLog, L"");
-            struct LF { HWND hLog; void operator()(const std::string& s) const {
-                if (!hLog) return;
-                std::wstring ws = s2w(s + "\r\n");
-                int len = GetWindowTextLength(hLog);
-                SendMessage(hLog, EM_SETSEL, len, len);
-                SendMessage(hLog, EM_REPLACESEL, 0, (LPARAM)ws.c_str());
-            }};
-            LF lf; lf.hLog = g_hSshLog;
-            lf("\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u0435 \u043a " + cfg.host + "...");
-            EnableWindow(GetDlgItem(hDlg, IDC_SSH_DEPLOY_BTN), FALSE);
-            std::thread([cfg, lf, hDlg]() {
-                bool ok = SshDeploy::deploy(cfg, lf);
-                lf(ok ? "\u0413\u043e\u0442\u043e\u0432\u043e!" : "\u041e\u0448\u0438\u0431\u043a\u0430 \u0440\u0430\u0437\u0432\u0435\u0440\u0442\u044b\u0432\u0430\u043d\u0438\u044f.");
-                EnableWindow(GetDlgItem(hDlg, IDC_SSH_DEPLOY_BTN), TRUE);
-            }).detach();
+        if (LOWORD(wp) == IDCANCEL) {
+            EndDialog(hDlg, IDCANCEL);
             return 1;
         }
     }
@@ -531,7 +523,8 @@ void showDeploy(HWND hParent) {
     DialogBoxParam(g_hInst, MAKEINTRESOURCE(103), hParent, DeployDlgProc, 0);
 }
 
-LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) { if (m == WM_COMMAND) {  }
+LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
+    if (m == WM_COMMAND) {}
     if (m == WM_CTLCOLORLISTBOX) {
         HDC dc = (HDC)wp;
         SetTextColor(dc, CLR_TEXT);
@@ -569,7 +562,8 @@ LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) { if (m == WM
             g_filteredUsers.clear();
             if (flt.empty()) {
                 g_filteredUsers = g_allUsers;
-            } else {
+            }
+            else {
                 for (size_t i = 0; i < g_allUsers.size(); i++) {
                     std::string nm = g_allUsers[i].name;
                     std::transform(nm.begin(), nm.end(), nm.begin(), (int(*)(int))std::tolower);

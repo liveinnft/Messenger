@@ -1,0 +1,86 @@
+#!/bin/bash
+# Автоматическая установка и запуск Messenger Server
+
+echo "================================================"
+echo "  Установка Messenger Server"
+echo "================================================"
+echo ""
+
+# Проверка ОС
+if [[ "$OSTYPE" != "linux-gnu"* ]]; then
+    echo "❌ Этот скрипт работает только на Linux"
+    exit 1
+fi
+
+# Установка зависимостей
+echo "📦 Установка зависимостей..."
+if command -v apt-get &> /dev/null; then
+    sudo apt-get update
+    sudo apt-get install -y cmake g++ build-essential
+elif command -v yum &> /dev/null; then
+    sudo yum install -y cmake gcc-c++ make
+else
+    echo "⚠️  Не удалось определить пакетный менеджер"
+    echo "   Установите вручную: cmake, g++, make"
+    exit 1
+fi
+
+# Проверка установки
+if ! command -v cmake &> /dev/null || ! command -v g++ &> /dev/null; then
+    echo "❌ Не удалось установить зависимости"
+    exit 1
+fi
+
+echo "✅ Зависимости установлены"
+echo ""
+
+# Компиляция
+echo "🔨 Компиляция сервера..."
+mkdir -p build
+cd build || exit 1
+
+cmake .. || {
+    echo "❌ Ошибка CMake"
+    exit 1
+}
+
+make -j$(nproc) || {
+    echo "❌ Ошибка компиляции"
+    exit 1
+}
+
+echo "✅ Сервер скомпилирован"
+echo ""
+
+# Остановка старого сервера
+echo "🔄 Остановка старых процессов..."
+pkill -f "./Server" 2>/dev/null || true
+sleep 1
+
+# Запуск сервера
+echo "🚀 Запуск сервера..."
+nohup ./Server > ../server.log 2>&1 &
+SERVER_PID=$!
+sleep 2
+
+# Проверка запуска
+if ps -p $SERVER_PID > /dev/null; then
+    echo ""
+    echo "================================================"
+    echo "  ✅ Сервер успешно запущен!"
+    echo "================================================"
+    echo ""
+    echo "  📡 Порт: 8888"
+    echo "  🆔 PID: $SERVER_PID"
+    echo "  📄 Лог: $(pwd)/../server.log"
+    echo ""
+    echo "  Подключайтесь к: $(hostname -I | awk '{print $1}'):8888"
+    echo ""
+    echo "  Остановить: kill $SERVER_PID"
+    echo "  Просмотр лога: tail -f $(pwd)/../server.log"
+    echo ""
+else
+    echo "❌ Не удалось запустить сервер"
+    echo "   Проверьте лог: $(pwd)/../server.log"
+    exit 1
+fi

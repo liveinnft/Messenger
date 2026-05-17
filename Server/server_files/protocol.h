@@ -1,9 +1,7 @@
-#ifndef PROTOCOL_H
-#define PROTOCOL_H
+#pragma once
 
 #include <string>
 #include <vector>
-#include <sstream>
 
 namespace Protocol {
     const std::string DELIMITER = "|";
@@ -11,7 +9,7 @@ namespace Protocol {
     enum MessageType {
         REGISTER,
         LOGIN,
-        MSG,
+        SEND_MSG,  // Переименовано из MSG для избежания конфликта с Windows API MSG
         GET_USERS,
         GET_MESSAGES,
         RESPONSE_OK,
@@ -25,7 +23,7 @@ namespace Protocol {
         switch (type) {
         case REGISTER: return "REGISTER";
         case LOGIN: return "LOGIN";
-        case MSG: return "MSG";
+        case SEND_MSG: return "MSG";
         case GET_USERS: return "GET_USERS";
         case GET_MESSAGES: return "GET_MESSAGES";
         case RESPONSE_OK: return "OK";
@@ -40,7 +38,7 @@ namespace Protocol {
     inline MessageType stringToType(const std::string& str) {
         if (str == "REGISTER") return REGISTER;
         if (str == "LOGIN") return LOGIN;
-        if (str == "MSG") return MSG;
+        if (str == "MSG") return SEND_MSG;
         if (str == "GET_USERS") return GET_USERS;
         if (str == "GET_MESSAGES") return GET_MESSAGES;
         if (str == "OK") return RESPONSE_OK;
@@ -55,7 +53,6 @@ namespace Protocol {
         std::vector<std::string> tokens;
         size_t start = 0;
         size_t end = str.find(delim);
-
         while (end != std::string::npos) {
             tokens.push_back(str.substr(start, end - start));
             start = end + delim.length();
@@ -70,8 +67,7 @@ namespace Protocol {
         for (const auto& item : data) {
             msg += DELIMITER + item;
         }
+        msg += "\n";
         return msg;
     }
 }
-
-#endif
