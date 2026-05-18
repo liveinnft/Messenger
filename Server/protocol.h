@@ -9,7 +9,7 @@ namespace Protocol {
     enum MessageType {
         REGISTER,
         LOGIN,
-        SEND_MSG,  // Переименовано из MSG для избежания конфликта с Windows API MSG
+        SEND_MSG,
         GET_USERS,
         GET_MESSAGES,
         RESPONSE_OK,

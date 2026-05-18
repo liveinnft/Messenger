@@ -9,7 +9,8 @@ namespace Protocol {
     enum MessageType {
         REGISTER,
         LOGIN,
-        SEND_MSG,  // Переименовано из MSG для избежания конфликта с Windows API MSG
+        MESSAGE,
+        SEND_MSG = MESSAGE,
         GET_USERS,
         GET_MESSAGES,
         RESPONSE_OK,
@@ -23,7 +24,7 @@ namespace Protocol {
         switch (type) {
         case REGISTER: return "REGISTER";
         case LOGIN: return "LOGIN";
-        case SEND_MSG: return "MSG";
+        case MESSAGE: return "MSG";
         case GET_USERS: return "GET_USERS";
         case GET_MESSAGES: return "GET_MESSAGES";
         case RESPONSE_OK: return "OK";
@@ -38,7 +39,7 @@ namespace Protocol {
     inline MessageType stringToType(const std::string& str) {
         if (str == "REGISTER") return REGISTER;
         if (str == "LOGIN") return LOGIN;
-        if (str == "MSG") return SEND_MSG;
+        if (str == "MSG") return MESSAGE;
         if (str == "GET_USERS") return GET_USERS;
         if (str == "GET_MESSAGES") return GET_MESSAGES;
         if (str == "OK") return RESPONSE_OK;
