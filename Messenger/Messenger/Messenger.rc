@@ -1,24 +1,24 @@
 #include <windows.h>
 #include "Resource.h"
 
-// Диалог подключения (ID = 102)
-102 DIALOGEX 0, 0, 360, 280
-STYLE DS_SETFONT | DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+// Диалог подключения (ID = 102) - компактный и изменяемый
+102 DIALOGEX 0, 0, 320, 240
+STYLE DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX
 CAPTION "Подключение к серверу"
 FONT 14, "Segoe UI"
 BEGIN
-    LTEXT "Сервер:", -1, 20, 20, 80, 22
-    EDITTEXT 201, 110, 18, 220, 26, WS_BORDER | WS_TABSTOP
-    LTEXT "Порт:", -1, 20, 55, 80, 22
-    EDITTEXT 202, 110, 53, 100, 26, WS_BORDER | WS_TABSTOP
-    LTEXT "Логин:", -1, 20, 90, 80, 22
-    EDITTEXT 203, 110, 88, 220, 26, WS_BORDER | WS_TABSTOP
-    LTEXT "Пароль:", -1, 20, 125, 80, 22
-    EDITTEXT 204, 110, 123, 220, 26, WS_BORDER | ES_PASSWORD | WS_TABSTOP
-    LTEXT "Нет аккаунта? Нажмите ""Регистрация""", -1, 20, 160, 250, 18
-    DEFPUSHBUTTON "Войти", 206, 20, 210, 100, 36, WS_TABSTOP
-    PUSHBUTTON "Регистрация", 205, 130, 210, 110, 36, WS_TABSTOP
-    PUSHBUTTON "Отмена", IDCANCEL, 250, 210, 80, 36, WS_TABSTOP
+    LTEXT "Сервер:", -1, 15, 15, 60, 20
+    EDITTEXT 201, 85, 12, 220, 24, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL
+    LTEXT "Порт:", -1, 15, 45, 60, 20
+    EDITTEXT 202, 85, 42, 80, 24, WS_BORDER | WS_TABSTOP
+    LTEXT "Логин:", -1, 15, 75, 60, 20
+    EDITTEXT 203, 85, 72, 220, 24, WS_BORDER | WS_TABSTOP | ES_AUTOHSCROLL
+    LTEXT "Пароль:", -1, 15, 105, 60, 20
+    EDITTEXT 204, 85, 102, 220, 24, WS_BORDER | ES_PASSWORD | WS_TABSTOP
+    LTEXT "Нет аккаунта? Нажмите ""Регистрация""", -1, 15, 140, 250, 18
+    DEFPUSHBUTTON "Войти", 206, 15, 175, 90, 32, WS_TABSTOP
+    PUSHBUTTON "Регистрация", 205, 115, 175, 95, 32, WS_TABSTOP
+    PUSHBUTTON "Отмена", IDCANCEL, 220, 175, 85, 32, WS_TABSTOP
 END
 
 // Диалог развертывания (ID = 103)

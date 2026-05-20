@@ -1,4 +1,4 @@
-﻿// Messenger Client - Telegram-Style Redesign
+﻿// Messenger Client - исправленный диалог входа, цветные аватарки, сохранение настроек
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
@@ -7,14 +7,16 @@
 #include <sstream>
 #include <ctime>
 #include <algorithm>
+#include <fstream>
+#include <atomic>
 #include "network.h"
 #include "protocol.h"
-// #include "ssh_deploy.h" // Отключено - не нужен libssh2
 #pragma comment(lib, "comctl32.lib")
 
 #define DT_WORD_ELL 0x00040000L
 #define ODS_HOT_CUSTOM 0x00000040L
 
+// Цвета
 #define CLR_BG RGB(26, 26, 30)
 #define CLR_SIDEBAR RGB(30, 30, 34)
 #define CLR_CHAT_BG RGB(30, 30, 34)
@@ -52,25 +54,19 @@
 #define ID_CONNECT_BTN 106
 #define ID_DEPLOY_BTN 107
 
-#define IDC_DLG_HOST 201
-#define IDC_DLG_PORT 202
-#define IDC_DLG_USER 203
-#define IDC_DLG_PASS 204
-#define IDC_DLG_REGISTER 205
-#define IDC_DLG_LOGIN_BTN 206
-
-#define IDC_SSH_HOST 301
-#define IDC_SSH_PORT 302
-#define IDC_SSH_USER 303
-#define IDC_SSH_PASS 304
-#define IDC_SSH_LOG 305
-#define IDC_SSH_DEPLOY_BTN 306
+// ID элементов диалога входа
+#define IDC_EDIT_HOST      201
+#define IDC_EDIT_PORT      202
+#define IDC_EDIT_USER      203
+#define IDC_EDIT_PASS      204
+#define IDC_BTN_LOGIN      205
+#define IDC_BTN_REGISTER   206
+#define IDC_BTN_CANCEL     207
 
 HINSTANCE g_hInst = NULL;
 HWND g_hMain = NULL, g_hSidebar = NULL, g_hChatHeader = NULL, g_hMsgView = NULL;
 HWND g_hMsgInput = NULL, g_hSendBtn = NULL, g_hChatList = NULL;
 HWND g_hSearchBox = NULL, g_hStatusTxt = NULL, g_hConnectBtn = NULL, g_hDeployBtn = NULL;
-HWND g_hLoginDlg = NULL, g_hDeployDlg = NULL, g_hSshLog = NULL;
 
 HFONT g_fontMain = NULL, g_fontSec = NULL, g_fontTiny = NULL, g_fontBold = NULL, g_fontBtn = NULL;
 HBRUSH g_hBrBg = NULL, g_hBrSidebar = NULL, g_hBrInput = NULL;
@@ -87,6 +83,54 @@ std::vector<ChatUser> g_allUsers, g_filteredUsers;
 std::vector<ChatMsg> g_messages;
 NetworkClient g_net;
 
+// Для аутентификации
+std::atomic<bool> g_authWaiting{ false };
+std::atomic<bool> g_authSuccess{ false };
+std::string g_authError;
+
+// ------------------------------------------------------------
+// Конфигурация
+// ------------------------------------------------------------
+struct AppConfig {
+    std::string lastHost;
+    int lastPort;
+    std::string lastUsername;
+    AppConfig() : lastHost("127.0.0.1"), lastPort(8888), lastUsername("") {}
+};
+
+void SaveConfig(const AppConfig& cfg) {
+    std::ofstream f("messenger.ini");
+    if (f) {
+        f << "host=" << cfg.lastHost << "\n";
+        f << "port=" << cfg.lastPort << "\n";
+        f << "username=" << cfg.lastUsername << "\n";
+        f.close();
+    }
+}
+
+AppConfig LoadConfig() {
+    AppConfig cfg;
+    std::ifstream f("messenger.ini");
+    if (f) {
+        std::string line;
+        while (std::getline(f, line)) {
+            if (line.empty() || line[0] == '#') continue;
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string key = line.substr(0, eq);
+            std::string val = line.substr(eq + 1);
+            if (key == "host") cfg.lastHost = val;
+            else if (key == "port") cfg.lastPort = std::stoi(val);
+            else if (key == "username") cfg.lastUsername = val;
+        }
+        f.close();
+    }
+    return cfg;
+}
+
+// ------------------------------------------------------------
+// Вспомогательные функции
+// ------------------------------------------------------------
 std::string curTime() {
     time_t n = time(NULL);
     struct tm t;
@@ -125,20 +169,19 @@ void setStatus(const std::string& t) {
     if (g_hStatusTxt) SetWindowText(g_hStatusTxt, s2w(t).c_str());
 }
 
-void drawRoundRect(HDC dc, RECT rc, int rad, COLORREF fill) {
-    if (rad <= 0) {
-        HBRUSH br = CreateSolidBrush(fill);
-        FillRect(dc, &rc, br);
-        DeleteObject(br);
-        return;
-    }
-    HRGN rgn = CreateRoundRectRgn(rc.left, rc.top, rc.right + 1, rc.bottom + 1, rad, rad);
-    HBRUSH br = CreateSolidBrush(fill);
-    FillRgn(dc, rgn, br);
-    DeleteObject(rgn);
-    DeleteObject(br);
+COLORREF GetAvatarColor(const std::string& name) {
+    if (name.empty()) return RGB(55, 60, 75);
+    unsigned int hash = 0;
+    for (char c : name) hash = hash * 131 + c;
+    int r = (hash & 0xFF) % 180 + 40;
+    int g = ((hash >> 8) & 0xFF) % 180 + 40;
+    int b = ((hash >> 16) & 0xFF) % 180 + 40;
+    return RGB(r, g, b);
 }
 
+// ------------------------------------------------------------
+// Графика (сокращённо, но рабочая)
+// ------------------------------------------------------------
 void drawEllipse2(HDC dc, int cx, int cy, int rx, int ry, COLORREF fill) {
     HRGN rgn = CreateEllipticRgn(cx - rx, cy - ry, cx + rx, cy + ry);
     HBRUSH br = CreateSolidBrush(fill);
@@ -161,7 +204,8 @@ void drawChatItem(DRAWITEMSTRUCT* dis) {
     DeleteObject(br);
     int L = 14;
     int avY = rc.top + (rc.bottom - rc.top) / 2 - 18;
-    drawEllipse2(dc, L + 18, avY + 18, 18, 18, RGB(55, 60, 75));
+    COLORREF avatarColor = GetAvatarColor(u.name);
+    drawEllipse2(dc, L + 18, avY + 18, 18, 18, avatarColor);
     wchar_t init[2] = { 0 };
     if (!u.name.empty()) {
         init[0] = u.name[0];
@@ -240,7 +284,11 @@ void drawMsgView(HDC dc, RECT rc) {
             brc.right = rc.left + bubbleW + 12;
         }
         COLORREF bubbleFill = m.isSelf ? CLR_BUBBLE_SELF : CLR_BUBBLE_OTHER;
-        drawRoundRect(dc, brc, MSG_BUBBLE_RAD, bubbleFill);
+        HRGN rgn = CreateRoundRectRgn(brc.left, brc.top, brc.right + 1, brc.bottom + 1, MSG_BUBBLE_RAD, MSG_BUBBLE_RAD);
+        HBRUSH br = CreateSolidBrush(bubbleFill);
+        FillRgn(dc, rgn, br);
+        DeleteObject(rgn);
+        DeleteObject(br);
         RECT txtR = brc;
         txtR.left += MSG_BUBBLE_PAD_X;
         txtR.top += MSG_BUBBLE_PAD_Y;
@@ -282,7 +330,8 @@ void drawChatHeader(HWND hWnd, HDC dc) {
     }
     int L = 14;
     int avY = (rc.bottom + rc.top) / 2 - 18;
-    drawEllipse2(dc, L + 18, avY + 18, 18, 18, RGB(55, 60, 75));
+    COLORREF avatarColor = GetAvatarColor(g_currentChat);
+    drawEllipse2(dc, L + 18, avY + 18, 18, 18, avatarColor);
     wchar_t init[2] = { 0 };
     if (!g_currentChat.empty()) {
         init[0] = g_currentChat[0];
@@ -311,6 +360,9 @@ void drawChatHeader(HWND hWnd, HDC dc) {
     SelectObject(dc, oldF);
 }
 
+// ------------------------------------------------------------
+// Сетевые сообщения
+// ------------------------------------------------------------
 struct SrvMsg { std::string raw; SrvMsg(const std::string& s) : raw(s) {} };
 
 void onSrvMsg(const std::string& raw) {
@@ -319,18 +371,30 @@ void onSrvMsg(const std::string& raw) {
 }
 
 void handleSrvMsg(const std::string& raw) {
-    auto parts = Protocol::split(raw, Protocol::DELIMITER);
+    std::string clean = raw;
+    clean.erase(std::remove(clean.begin(), clean.end(), '\r'), clean.end());
+    auto parts = Protocol::split(clean, Protocol::DELIMITER);
     if (parts.empty()) return;
     Protocol::MessageType t = Protocol::stringToType(parts[0]);
+
+    if (g_authWaiting) {
+        if (t == Protocol::RESPONSE_OK) {
+            g_authSuccess = true;
+            g_authWaiting = false;
+        }
+        else if (t == Protocol::RESPONSE_ERROR) {
+            g_authSuccess = false;
+            g_authError = (parts.size() >= 2) ? parts[1] : "Unknown error";
+            g_authWaiting = false;
+        }
+        return;
+    }
+
     if (t == Protocol::USER_LIST) {
         g_allUsers.clear();
         for (size_t i = 1; i < parts.size(); i++) {
             if (!parts[i].empty() && parts[i] != g_currentUser) {
-                ChatUser u;
-                u.name = parts[i];
-                u.online = true;
-                u.lastMsg = "";
-                u.lastTime = "";
+                ChatUser u; u.name = parts[i]; u.online = true; u.lastMsg = ""; u.lastTime = "";
                 g_allUsers.push_back(u);
             }
         }
@@ -343,9 +407,7 @@ void handleSrvMsg(const std::string& raw) {
     else if (t == Protocol::MESSAGE_LIST) {
         g_messages.clear();
         for (size_t i = 1; i + 3 < parts.size(); i += 4) {
-            ChatMsg m;
-            m.sender = parts[i];
-            m.text = parts[i + 2];
+            ChatMsg m; m.sender = parts[i]; m.text = parts[i + 2];
             m.time = (i + 3 < parts.size()) ? parts[i + 3] : curTime();
             m.isSelf = (m.sender == g_currentUser);
             g_messages.push_back(m);
@@ -354,10 +416,7 @@ void handleSrvMsg(const std::string& raw) {
     }
     else if (t == Protocol::NEW_MESSAGE) {
         if (parts.size() >= 4) {
-            ChatMsg m;
-            m.sender = parts[1];
-            m.text = parts[3];
-            m.time = curTime();
+            ChatMsg m; m.sender = parts[1]; m.text = parts[3]; m.time = curTime();
             m.isSelf = (m.sender == g_currentUser);
             g_messages.push_back(m);
             for (size_t i = 0; i < g_allUsers.size(); i++) {
@@ -372,159 +431,255 @@ void handleSrvMsg(const std::string& raw) {
             InvalidateRect(g_hChatList, NULL, FALSE);
         }
     }
-    else if (t == Protocol::RESPONSE_ERROR) {
-        if (parts.size() >= 2)
-            MessageBox(g_hMain, s2w(parts[1]).c_str(), L"\u041e\u0448\u0438\u0431\u043a\u0430", MB_OK | MB_ICONERROR);
-    }
 }
 
 void reqUsers() {
-    if (g_net.isConnected()) {
-        std::string r = Protocol::createMessage(Protocol::GET_USERS, std::vector<std::string>());
-        g_net.sendMessage(r);
-    }
+    if (g_net.isConnected())
+        g_net.sendMessage(Protocol::createMessage(Protocol::GET_USERS, {}));
 }
 
 void reqHist(const std::string& who) {
     if (g_net.isConnected()) {
-        std::vector<std::string> args;
-        args.push_back(g_currentUser);
-        args.push_back(who);
-        std::string r = Protocol::createMessage(Protocol::GET_MESSAGES, args);
-        g_net.sendMessage(r);
+        std::vector<std::string> args = { g_currentUser, who };
+        g_net.sendMessage(Protocol::createMessage(Protocol::GET_MESSAGES, args));
     }
 }
 
 void sendMsg(const std::string& text) {
     if (!g_loggedIn || g_currentChat.empty() || text.empty()) return;
-    std::vector<std::string> args;
-    args.push_back(g_currentUser);
-    args.push_back(g_currentChat);
-    args.push_back(text);
-    std::string r = Protocol::createMessage(Protocol::SEND_MSG, args);
-    if (g_net.sendMessage(r)) {
-        ChatMsg m;
-        m.sender = g_currentUser;
-        m.text = text;
-        m.time = curTime();
-        m.isSelf = true;
+    std::vector<std::string> args = { g_currentUser, g_currentChat, text };
+    if (g_net.sendMessage(Protocol::createMessage(Protocol::SEND_MSG, args))) {
+        ChatMsg m; m.sender = g_currentUser; m.text = text; m.time = curTime(); m.isSelf = true;
         g_messages.push_back(m);
-        for (size_t i = 0; i < g_allUsers.size(); i++) {
-            if (g_allUsers[i].name == g_currentChat) {
-                g_allUsers[i].lastMsg = text;
-                g_allUsers[i].lastTime = m.time;
-                break;
-            }
-        }
+        for (auto& u : g_allUsers)
+            if (u.name == g_currentChat) { u.lastMsg = text; u.lastTime = m.time; break; }
+        g_filteredUsers = g_allUsers;
         InvalidateRect(g_hMsgView, NULL, FALSE);
         InvalidateRect(g_hChatList, NULL, FALSE);
     }
 }
 
+// ------------------------------------------------------------
+// Диалог входа с собственной оконной процедурой
+// ------------------------------------------------------------
 struct LoginData { std::string host; int port; std::string user, pass; bool doReg; };
 LoginData g_ld;
+bool g_loginDialogResult = false;
 
-
-INT_PTR CALLBACK LoginDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_INITDIALOG) {
-        SetDlgItemText(hDlg, IDC_DLG_HOST, L"127.0.0.1");
-        SetDlgItemText(hDlg, IDC_DLG_PORT, L"8888");
-        SetFocus(GetDlgItem(hDlg, IDC_DLG_USER));
-        return 0;
+LRESULT CALLBACK LoginDialogProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_INITDIALOG: {
+        AppConfig cfg = LoadConfig();
+        SetDlgItemText(hDlg, IDC_EDIT_HOST, s2w(cfg.lastHost).c_str());
+        SetDlgItemText(hDlg, IDC_EDIT_PORT, s2w(std::to_string(cfg.lastPort)).c_str());
+        SetDlgItemText(hDlg, IDC_EDIT_USER, s2w(cfg.lastUsername).c_str());
+        SetFocus(GetDlgItem(hDlg, IDC_EDIT_USER));
+        return TRUE;
     }
-    if (msg == WM_COMMAND) {
+    case WM_COMMAND: {
         int id = LOWORD(wp);
-        if (id == IDCANCEL) { EndDialog(hDlg, IDCANCEL); return 1; }
-        if (id == IDC_DLG_LOGIN_BTN || id == IDC_DLG_REGISTER) {
-            wchar_t b[512];
-            GetDlgItemText(hDlg, IDC_DLG_HOST, b, 512); g_ld.host = w2s(b);
-            GetDlgItemText(hDlg, IDC_DLG_PORT, b, 512); g_ld.port = _wtoi(b);
-            if (g_ld.port <= 0) g_ld.port = 8888;
-            GetDlgItemText(hDlg, IDC_DLG_USER, b, 512); g_ld.user = w2s(b);
-            GetDlgItemText(hDlg, IDC_DLG_PASS, b, 512); g_ld.pass = w2s(b);
-            trimStr(g_ld.user); trimStr(g_ld.pass);
-            if (g_ld.user.empty()) { MessageBox(hDlg, L"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043b\u043e\u0433\u0438\u043d", L"\u041e\u0448\u0438\u0431\u043a\u0430", MB_OK); return 1; }
-            if (g_ld.pass.empty()) { MessageBox(hDlg, L"\u0412\u0432\u0435\u0434\u0438\u0442\u0435 \u043f\u0430\u0440\u043e\u043b\u044c", L"\u041e\u0448\u0438\u0431\u043a\u0430", MB_OK); return 1; }
-            g_ld.doReg = (id == IDC_DLG_REGISTER);
-            EndDialog(hDlg, IDOK);
-            return 1;
+        if (id == IDC_BTN_CANCEL) {
+            DestroyWindow(hDlg);
+            g_loginDialogResult = false;
+            return TRUE;
         }
+        if (id == IDC_BTN_LOGIN || id == IDC_BTN_REGISTER) {
+            wchar_t buf[256];
+            GetDlgItemText(hDlg, IDC_EDIT_HOST, buf, 256); g_ld.host = w2s(buf);
+            GetDlgItemText(hDlg, IDC_EDIT_PORT, buf, 256); g_ld.port = _wtoi(buf);
+            if (g_ld.port <= 0) g_ld.port = 8888;
+            GetDlgItemText(hDlg, IDC_EDIT_USER, buf, 256); g_ld.user = w2s(buf);
+            GetDlgItemText(hDlg, IDC_EDIT_PASS, buf, 256); g_ld.pass = w2s(buf);
+            trimStr(g_ld.user); trimStr(g_ld.pass);
+            if (g_ld.user.empty() || g_ld.pass.empty()) {
+                MessageBox(hDlg, L"Заполните логин и пароль", L"Ошибка", MB_OK);
+                return TRUE;
+            }
+            g_ld.doReg = (id == IDC_BTN_REGISTER);
+            DestroyWindow(hDlg);
+            g_loginDialogResult = true;
+            return TRUE;
+        }
+        break;
     }
-    return 0;
+    case WM_DESTROY:
+        PostQuitMessage(0);
+        break;
+    }
+    return DefWindowProc(hDlg, msg, wp, lp);
 }
 
-void doConnect(HWND hParent) {
-    g_ld = {};
-    INT_PTR r = DialogBoxParam(g_hInst, MAKEINTRESOURCE(102), hParent, LoginDlgProc, 0);
-    if (r != IDOK || g_ld.host.empty()) return;
-    g_serverHost = g_ld.host;
-    g_serverPort = g_ld.port;
+bool ShowLoginDialog(HWND hParent) {
+    // Регистрируем класс окна для диалога (один раз)
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSEX wc = {};
+        wc.cbSize = sizeof(WNDCLASSEX);
+        wc.style = CS_HREDRAW | CS_VREDRAW;
+        wc.lpfnWndProc = LoginDialogProc;
+        wc.hInstance = g_hInst;
+        wc.hCursor = LoadCursor(NULL, IDC_ARROW);
+        wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
+        wc.lpszClassName = L"LoginDialogClass";
+        RegisterClassEx(&wc);
+        registered = true;
+    }
+
+    HWND hDlg = CreateWindowEx(WS_EX_DLGMODALFRAME, L"LoginDialogClass", L"Подключение",
+        WS_POPUP | WS_CAPTION | WS_SYSMENU,
+        0, 0, 400, 280, hParent, NULL, g_hInst, NULL);
+    if (!hDlg) return false;
+
+    // Создаём элементы управления
+    HFONT hFont = CreateFont(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+        OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+
+    auto createStatic = [&](const wchar_t* txt, int x, int y) {
+        HWND h = CreateWindow(L"STATIC", txt, WS_VISIBLE | WS_CHILD, x, y, 80, 22, hDlg, NULL, g_hInst, NULL);
+        SendMessage(h, WM_SETFONT, (WPARAM)hFont, TRUE);
+        return h;
+        };
+    auto createEdit = [&](int id, int x, int y, bool pass) {
+        DWORD style = WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL;
+        if (pass) style |= ES_PASSWORD;
+        HWND h = CreateWindow(L"EDIT", L"", style, x, y, 250, 24, hDlg, (HMENU)(INT_PTR)id, g_hInst, NULL);
+        SendMessage(h, WM_SETFONT, (WPARAM)hFont, TRUE);
+        return h;
+        };
+    auto createBtn = [&](const wchar_t* txt, int id, int x, int y) {
+        HWND h = CreateWindow(L"BUTTON", txt, WS_VISIBLE | WS_CHILD | BS_PUSHBUTTON, x, y, 100, 32, hDlg, (HMENU)(INT_PTR)id, g_hInst, NULL);
+        SendMessage(h, WM_SETFONT, (WPARAM)hFont, TRUE);
+        return h;
+        };
+
+    createStatic(L"Сервер:", 20, 20);
+    createEdit(IDC_EDIT_HOST, 110, 18, false);
+    createStatic(L"Порт:", 20, 55);
+    createEdit(IDC_EDIT_PORT, 110, 53, false);
+    createStatic(L"Логин:", 20, 90);
+    createEdit(IDC_EDIT_USER, 110, 88, false);
+    createStatic(L"Пароль:", 20, 125);
+    createEdit(IDC_EDIT_PASS, 110, 123, true);
+    createBtn(L"Войти", IDC_BTN_LOGIN, 20, 180);
+    createBtn(L"Регистрация", IDC_BTN_REGISTER, 140, 180);
+    createBtn(L"Отмена", IDC_BTN_CANCEL, 280, 180);
+
+    // Центрируем окно
+    RECT prc, drc;
+    GetWindowRect(hParent, &prc);
+    GetWindowRect(hDlg, &drc);
+    SetWindowPos(hDlg, NULL,
+        prc.left + (prc.right - prc.left) / 2 - (drc.right - drc.left) / 2,
+        prc.top + (prc.bottom - prc.top) / 2 - (drc.bottom - drc.top) / 2,
+        0, 0, SWP_NOSIZE);
+    ShowWindow(hDlg, SW_SHOW);
+    UpdateWindow(hDlg);
+
+    // Локальный цикл сообщений
+    MSG msg;
+    while (GetMessage(&msg, NULL, 0, 0)) {
+        if (!IsWindow(hDlg)) break;
+        if (!IsDialogMessage(hDlg, &msg)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+    }
+    DeleteObject(hFont);
+    return g_loginDialogResult;
+}
+
+bool SendAndWait(const std::string& cmd, int timeoutSec = 5) {
+    if (!g_net.sendMessage(cmd)) return false;
+    g_authWaiting = true;
+    for (int i = 0; i < timeoutSec * 10; ++i) {
+        MSG msg;
+        while (PeekMessage(&msg, NULL, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&msg);
+            DispatchMessage(&msg);
+        }
+        if (!g_authWaiting) break;
+        Sleep(100);
+    }
+    if (g_authWaiting) {
+        g_authWaiting = false;
+        return false;
+    }
+    return g_authSuccess;
+}
+
+bool PerformAuth(HWND hParent, const LoginData& ld) {
+    g_serverHost = ld.host;
+    g_serverPort = ld.port;
     setStatus("Подключение к " + g_serverHost + "...");
     if (g_net.isConnected()) g_net.disconnect();
-    if (!g_net.connectToServer(g_ld.host, g_ld.port)) {
-        MessageBox(hParent, L"\u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f.\n\u041f\u0440\u043e\u0432\u0435\u0440\u044c\u0442\u0435 \u0430\u0434\u0440\u0435\u0441 \u0438 \u043f\u043e\u0440\u0442.", L"\u041e\u0448\u0438\u0431\u043a\u0430", MB_OK | MB_ICONERROR);
-        setStatus("\u041d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043e");
-        return;
+    if (!g_net.connectToServer(ld.host, ld.port)) {
+        MessageBox(hParent, L"Не удалось подключиться.\nПроверьте адрес и порт.", L"Ошибка", MB_OK | MB_ICONERROR);
+        setStatus("Не подключено");
+        return false;
     }
     g_net.setOnMessage(onSrvMsg);
-    setStatus("\u0410\u0432\u0442\u043e\u0440\u0438\u0437\u0430\u0446\u0438\u044f...");
-    Sleep(100);
-    if (g_ld.doReg) {
-        std::vector<std::string> a; a.push_back(g_ld.user); a.push_back(g_ld.pass);
-        g_net.sendMessage(Protocol::createMessage(Protocol::REGISTER, a));
-        Sleep(250);
+    setStatus("Авторизация...");
+
+    if (ld.doReg) {
+        std::string regMsg = Protocol::createMessage(Protocol::REGISTER, { ld.user, ld.pass });
+        if (!SendAndWait(regMsg)) {
+            MessageBox(hParent, (L"Ошибка регистрации: " + s2w(g_authError)).c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
+            setStatus("Ошибка регистрации");
+            return false;
+        }
     }
-    std::vector<std::string> a2; a2.push_back(g_ld.user); a2.push_back(g_ld.pass);
-    g_net.sendMessage(Protocol::createMessage(Protocol::LOGIN, a2));
-    Sleep(250);
-    g_currentUser = g_ld.user;
+    std::string loginMsg = Protocol::createMessage(Protocol::LOGIN, { ld.user, ld.pass });
+    if (!SendAndWait(loginMsg)) {
+        MessageBox(hParent, (L"Ошибка входа: " + (g_authError.empty() ? L"сервер не ответил" : s2w(g_authError))).c_str(), L"Ошибка", MB_OK | MB_ICONERROR);
+        setStatus("Ошибка входа");
+        return false;
+    }
+
+    g_currentUser = ld.user;
     g_loggedIn = true;
-    std::wstring ttl = L"Messenger - " + s2w(g_currentUser);
-    SetWindowText(hParent, ttl.c_str());
+    SetWindowText(hParent, (L"Messenger - " + s2w(g_currentUser)).c_str());
     wchar_t sb[128];
-    swprintf(sb, 128, L"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043e: %S:%d", g_serverHost.c_str(), g_serverPort);
+    swprintf(sb, 128, L"Подключено: %S:%d", g_serverHost.c_str(), g_serverPort);
     setStatus(w2s(sb));
     EnableWindow(g_hMsgInput, TRUE);
     EnableWindow(g_hSendBtn, TRUE);
     reqUsers();
+
+    AppConfig cfg;
+    cfg.lastHost = ld.host;
+    cfg.lastPort = ld.port;
+    cfg.lastUsername = ld.user;
+    SaveConfig(cfg);
+    return true;
 }
-INT_PTR CALLBACK DeployDlgProc(HWND hDlg, UINT msg, WPARAM wp, LPARAM lp) {
-    if (msg == WM_INITDIALOG) {
-        // Показываем информацию о развертывании
-        HWND hLog = GetDlgItem(hDlg, IDC_SSH_LOG);
-        std::wstring info =
-            L"Для запуска сервера используйте один из способов:\r\n\r\n"
-            L"1. WSL (Windows Subsystem for Linux):\r\n"
-            L"   • PowerShell от админа: wsl --install\r\n"
-            L"   • Перезагрузка\r\n"
-            L"   • wsl\r\n"
-            L"   • cd ~/Server && ./install.sh\r\n\r\n"
-            L"2. VPS/облако:\r\n"
-            L"   • Скопируйте Server/ на сервер\r\n"
-            L"   • Запустите ./install.sh\r\n\r\n"
-            L"3. Docker:\r\n"
-            L"   • docker build -t msg-srv .\r\n"
-            L"   • docker run -p 8888:8888 msg-srv\r\n\r\n"
-            L"Подробнее: Server/README_SERVER.md\r\n";
-        SetWindowText(hLog, info.c_str());
-        SetFocus(GetDlgItem(hDlg, IDCANCEL));
-        return 1;
-    }
-    if (msg == WM_COMMAND) {
-        if (LOWORD(wp) == IDCANCEL) {
-            EndDialog(hDlg, IDCANCEL);
-            return 1;
-        }
-    }
-    return 0;
+
+void doConnect(HWND hParent) {
+    if (!ShowLoginDialog(hParent)) return;
+    PerformAuth(hParent, g_ld);
 }
 
 void showDeploy(HWND hParent) {
-    DialogBoxParam(g_hInst, MAKEINTRESOURCE(103), hParent, DeployDlgProc, 0);
+    MessageBox(hParent,
+        L"Для запуска сервера используйте один из способов:\n\n"
+        L"1. WSL (Windows Subsystem for Linux):\n"
+        L"   • wsl --install\n"
+        L"   • cd Server && mkdir build && cd build\n"
+        L"   • cmake .. && make && ./Server\n\n"
+        L"2. VPS/облако:\n"
+        L"   • Скопируйте Server/ на сервер\n"
+        L"   • Запустите ./install.sh\n\n"
+        L"3. Docker:\n"
+        L"   • docker build -t msg-srv .\n"
+        L"   • docker run -p 8888:8888 msg-srv\n\n"
+        L"Подробнее: README_SERVER.md",
+        L"Запуск сервера",
+        MB_OK | MB_ICONINFORMATION);
 }
 
+// ------------------------------------------------------------
+// Обработчики окон (без изменений)
+// ------------------------------------------------------------
 LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
-    if (m == WM_COMMAND) {}
     if (m == WM_CTLCOLORLISTBOX) {
         HDC dc = (HDC)wp;
         SetTextColor(dc, CLR_TEXT);
@@ -560,21 +715,19 @@ LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             std::string flt = w2s(b);
             trimStr(flt);
             g_filteredUsers.clear();
-            if (flt.empty()) {
-                g_filteredUsers = g_allUsers;
-            }
+            if (flt.empty()) g_filteredUsers = g_allUsers;
             else {
-                for (size_t i = 0; i < g_allUsers.size(); i++) {
-                    std::string nm = g_allUsers[i].name;
-                    std::transform(nm.begin(), nm.end(), nm.begin(), (int(*)(int))std::tolower);
+                for (auto& u : g_allUsers) {
+                    std::string nm = u.name;
+                    std::transform(nm.begin(), nm.end(), nm.begin(), ::tolower);
                     std::string f2 = flt;
-                    std::transform(f2.begin(), f2.end(), f2.begin(), (int(*)(int))std::tolower);
-                    if (nm.find(f2) != std::string::npos) g_filteredUsers.push_back(g_allUsers[i]);
+                    std::transform(f2.begin(), f2.end(), f2.begin(), ::tolower);
+                    if (nm.find(f2) != std::string::npos) g_filteredUsers.push_back(u);
                 }
             }
             SendMessage(g_hChatList, LB_RESETCONTENT, 0, 0);
-            for (size_t i = 0; i < g_filteredUsers.size(); i++)
-                SendMessage(g_hChatList, LB_ADDSTRING, 0, (LPARAM)s2w(g_filteredUsers[i].name).c_str());
+            for (auto& u : g_filteredUsers)
+                SendMessage(g_hChatList, LB_ADDSTRING, 0, (LPARAM)s2w(u.name).c_str());
             return 0;
         }
     }
@@ -596,8 +749,7 @@ LRESULT CALLBACK MsgViewProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     if (m == WM_PAINT) {
         PAINTSTRUCT ps;
         HDC dc = BeginPaint(h, &ps);
-        RECT rc;
-        GetClientRect(h, &rc);
+        RECT rc; GetClientRect(h, &rc);
         drawMsgView(dc, rc);
         EndPaint(h, &ps);
         return 0;
@@ -640,25 +792,17 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
             GetWindowText(g_hMsgInput, b, 2048);
             std::string t = w2s(b);
             trimStr(t);
-            if (!t.empty()) {
-                sendMsg(t);
-                SetWindowText(g_hMsgInput, L"");
-            }
+            if (!t.empty()) { sendMsg(t); SetWindowText(g_hMsgInput, L""); }
             return 0;
         }
     }
     if (m == WM_KEYDOWN && wp == VK_RETURN) {
-        if (GetFocus() == g_hMsgInput) {
-            SendMessage(h, WM_COMMAND, ID_SEND_BTN, 0);
-            return 0;
-        }
+        if (GetFocus() == g_hMsgInput) { SendMessage(h, WM_COMMAND, ID_SEND_BTN, 0); return 0; }
     }
     if (m == WM_SIZE) {
-        RECT rc;
-        GetClientRect(h, &rc);
+        RECT rc; GetClientRect(h, &rc);
         int W = rc.right, H = rc.bottom;
-        int sbH = H - 28;
-        int iY = sbH - INPUT_AREA_H;
+        int sbH = H - 28, iY = sbH - INPUT_AREA_H;
         MoveWindow(g_hSidebar, 0, 0, SIDEBAR_W, sbH, TRUE);
         MoveWindow(g_hChatHeader, SIDEBAR_W, 0, W - SIDEBAR_W, CHAT_HEADER_H, TRUE);
         MoveWindow(g_hMsgView, SIDEBAR_W, CHAT_HEADER_H, W - SIDEBAR_W, sbH - CHAT_HEADER_H - INPUT_AREA_H, TRUE);
@@ -675,96 +819,65 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     return DefWindowProc(h, m, wp, lp);
 }
 
+// ------------------------------------------------------------
+// Точка входа
+// ------------------------------------------------------------
 int APIENTRY wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int show) {
     g_hInst = hi;
     g_hBrBg = CreateSolidBrush(CLR_BG);
     g_hBrSidebar = CreateSolidBrush(CLR_SIDEBAR);
     g_hBrInput = CreateSolidBrush(CLR_INPUT_BG);
-    g_fontMain = CreateFont(FONT_MAIN_SZ, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_fontSec = CreateFont(FONT_SEC_SZ, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_fontTiny = CreateFont(FONT_TINY_SZ, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_fontBold = CreateFont(FONT_MAIN_SZ, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    g_fontBtn = CreateFont(FONT_SEC_SZ, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-    INITCOMMONCONTROLSEX icc = {};
-    icc.dwSize = sizeof(icc);
-    icc.dwICC = ICC_WIN95_CLASSES | ICC_LISTVIEW_CLASSES;
+    g_fontMain = CreateFont(FONT_MAIN_SZ, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    g_fontSec = CreateFont(FONT_SEC_SZ, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    g_fontTiny = CreateFont(FONT_TINY_SZ, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    g_fontBold = CreateFont(FONT_MAIN_SZ, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+    g_fontBtn = CreateFont(FONT_SEC_SZ, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+
+    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_WIN95_CLASSES | ICC_LISTVIEW_CLASSES };
     InitCommonControlsEx(&icc);
-    WNDCLASSEX wc = {};
-    wc.cbSize = sizeof(WNDCLASSEX);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = WndProc;
-    wc.hInstance = hi;
-    wc.hIcon = LoadIcon(NULL, IDI_APPLICATION);
-    wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = g_hBrBg;
-    wc.lpszClassName = L"MessengerApp";
+
+    WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, WndProc, 0, 0, hi, LoadIcon(NULL, IDI_APPLICATION), LoadCursor(NULL, IDC_ARROW), g_hBrBg, NULL, L"MessengerApp", NULL };
     RegisterClassEx(&wc);
-    WNDCLASSEX wcS = {};
-    wcS.cbSize = sizeof(WNDCLASSEX);
-    wcS.style = CS_HREDRAW | CS_VREDRAW;
-    wcS.lpfnWndProc = SidebarProc;
-    wcS.hInstance = hi;
-    wcS.hbrBackground = g_hBrSidebar;
-    wcS.lpszClassName = L"MessengerSidebar";
-    wcS.hCursor = LoadCursor(NULL, IDC_ARROW);
+    WNDCLASSEX wcS = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, SidebarProc, 0, 0, hi, NULL, LoadCursor(NULL, IDC_ARROW), g_hBrSidebar, NULL, L"MessengerSidebar", NULL };
     RegisterClassEx(&wcS);
-    WNDCLASSEX wcH = {};
-    wcH.cbSize = sizeof(WNDCLASSEX);
-    wcH.style = CS_HREDRAW | CS_VREDRAW;
-    wcH.lpfnWndProc = ChatHeaderProc;
-    wcH.hInstance = hi;
-    wcH.hbrBackground = CreateSolidBrush(CLR_HEADER);
-    wcH.lpszClassName = L"MessengerChatHeader";
+    WNDCLASSEX wcH = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, ChatHeaderProc, 0, 0, hi, NULL, LoadCursor(NULL, IDC_ARROW), CreateSolidBrush(CLR_HEADER), NULL, L"MessengerChatHeader", NULL };
     RegisterClassEx(&wcH);
-    WNDCLASSEX wcM = {};
-    wcM.cbSize = sizeof(WNDCLASSEX);
-    wcM.style = CS_HREDRAW | CS_VREDRAW;
-    wcM.lpfnWndProc = MsgViewProc;
-    wcM.hInstance = hi;
-    wcM.hbrBackground = CreateSolidBrush(CLR_CHAT_BG);
-    wcM.lpszClassName = L"MessengerMsgView";
+    WNDCLASSEX wcM = { sizeof(WNDCLASSEX), CS_HREDRAW | CS_VREDRAW, MsgViewProc, 0, 0, hi, NULL, LoadCursor(NULL, IDC_ARROW), CreateSolidBrush(CLR_CHAT_BG), NULL, L"MessengerMsgView", NULL };
     RegisterClassEx(&wcM);
-    int sw = GetSystemMetrics(SM_CXSCREEN);
-    int sh = GetSystemMetrics(SM_CYSCREEN);
-    int ww = min(1100, sw);
-    int wh = min(700, sh);
+
+    int sw = GetSystemMetrics(SM_CXSCREEN), sh = GetSystemMetrics(SM_CYSCREEN);
+    int ww = min(1100, sw), wh = min(700, sh);
     g_hMain = CreateWindowEx(0, L"MessengerApp", L"Messenger", WS_OVERLAPPEDWINDOW,
         (sw - ww) / 2, (sh - wh) / 2, ww, wh, NULL, NULL, hi, NULL);
+
     int tY = 50;
-    g_hSidebar = CreateWindowEx(0, L"MessengerSidebar", L"", WS_CHILD | WS_VISIBLE,
-        0, 0, SIDEBAR_W, wh, g_hMain, NULL, hi, NULL);
-    g_hSearchBox = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL,
-        10, 10, SIDEBAR_W - 20, 30, g_hSidebar, (HMENU)ID_SIDEBAR_SEARCH, hi, NULL);
+    g_hSidebar = CreateWindowEx(0, L"MessengerSidebar", L"", WS_CHILD | WS_VISIBLE, 0, 0, SIDEBAR_W, wh, g_hMain, NULL, hi, NULL);
+    g_hSearchBox = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_BORDER | ES_AUTOHSCROLL, 10, 10, SIDEBAR_W - 20, 30, g_hSidebar, (HMENU)ID_SIDEBAR_SEARCH, hi, NULL);
     SendMessage(g_hSearchBox, WM_SETFONT, (WPARAM)g_fontSec, TRUE);
-    g_hConnectBtn = CreateWindow(L"BUTTON", L"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        10, tY, SIDEBAR_W - 20, 36, g_hSidebar, (HMENU)ID_CONNECT_BTN, hi, NULL);
+    g_hConnectBtn = CreateWindow(L"BUTTON", L"\u041f\u043e\u0434\u043a\u043b\u044e\u0447\u0438\u0442\u044c\u0441\u044f", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 10, tY, SIDEBAR_W - 20, 36, g_hSidebar, (HMENU)ID_CONNECT_BTN, hi, NULL);
     SendMessage(g_hConnectBtn, WM_SETFONT, (WPARAM)g_fontBtn, TRUE);
-    g_hDeployBtn = CreateWindow(L"BUTTON", L"\u0420\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c \u0441\u0435\u0440\u0432\u0435\u0440", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        10, tY + 42, SIDEBAR_W - 20, 36, g_hSidebar, (HMENU)ID_DEPLOY_BTN, hi, NULL);
+    g_hDeployBtn = CreateWindow(L"BUTTON", L"\u0420\u0430\u0437\u0432\u0435\u0440\u043d\u0443\u0442\u044c \u0441\u0435\u0440\u0432\u0435\u0440", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 10, tY + 42, SIDEBAR_W - 20, 36, g_hSidebar, (HMENU)ID_DEPLOY_BTN, hi, NULL);
     SendMessage(g_hDeployBtn, WM_SETFONT, (WPARAM)g_fontBtn, TRUE);
-    g_hChatList = CreateWindow(L"LISTBOX", NULL, WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS,
-        0, tY + 84, SIDEBAR_W, wh - 150, g_hSidebar, (HMENU)ID_CHAT_LIST, hi, NULL);
+    g_hChatList = CreateWindow(L"LISTBOX", NULL, WS_CHILD | WS_VISIBLE | WS_VSCROLL | LBS_NOTIFY | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS, 0, tY + 84, SIDEBAR_W, wh - 150, g_hSidebar, (HMENU)ID_CHAT_LIST, hi, NULL);
     SendMessage(g_hChatList, WM_SETFONT, (WPARAM)g_fontMain, TRUE);
+
     int cX = SIDEBAR_W, cW = ww - SIDEBAR_W, cH = wh - 28, mY = cH - INPUT_AREA_H;
-    g_hChatHeader = CreateWindowEx(0, L"MessengerChatHeader", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        cX, 0, cW, CHAT_HEADER_H, g_hMain, NULL, hi, NULL);
-    g_hMsgView = CreateWindowEx(0, L"MessengerMsgView", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS,
-        cX, CHAT_HEADER_H, cW, cH - CHAT_HEADER_H - INPUT_AREA_H, g_hMain, NULL, hi, NULL);
-    g_hMsgInput = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_BORDER | ES_AUTOHSCROLL | ES_MULTILINE,
-        cX, mY, cW - SEND_BTN_W - 4, INPUT_AREA_H - 4, g_hMain, (HMENU)ID_MSG_INPUT, hi, NULL);
+    g_hChatHeader = CreateWindowEx(0, L"MessengerChatHeader", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, cX, 0, cW, CHAT_HEADER_H, g_hMain, NULL, hi, NULL);
+    g_hMsgView = CreateWindowEx(0, L"MessengerMsgView", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, cX, CHAT_HEADER_H, cW, cH - CHAT_HEADER_H - INPUT_AREA_H, g_hMain, NULL, hi, NULL);
+    g_hMsgInput = CreateWindow(L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_BORDER | ES_AUTOHSCROLL | ES_MULTILINE, cX, mY, cW - SEND_BTN_W - 4, INPUT_AREA_H - 4, g_hMain, (HMENU)ID_MSG_INPUT, hi, NULL);
     SendMessage(g_hMsgInput, WM_SETFONT, (WPARAM)g_fontMain, TRUE);
-    HFONT hFontArrow = CreateFont(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI Symbol");
-    g_hSendBtn = CreateWindow(L"BUTTON", L" ", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON,
-        cX + cW - SEND_BTN_W, mY, SEND_BTN_W, INPUT_AREA_H - 4, g_hMain, (HMENU)ID_SEND_BTN, hi, NULL);
+    HFONT hFontArrow = CreateFont(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI Symbol");
+    g_hSendBtn = CreateWindow(L"BUTTON", L" ", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | BS_PUSHBUTTON, cX + cW - SEND_BTN_W, mY, SEND_BTN_W, INPUT_AREA_H - 4, g_hMain, (HMENU)ID_SEND_BTN, hi, NULL);
     SendMessage(g_hSendBtn, WM_SETFONT, (WPARAM)hFontArrow, TRUE);
     DeleteObject(hFontArrow);
-    g_hStatusTxt = CreateWindow(L"STATIC", L"\u041d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043e", WS_CHILD | WS_VISIBLE | SS_LEFT,
-        0, wh - 28, ww, 28, g_hMain, NULL, hi, NULL);
+    g_hStatusTxt = CreateWindow(L"STATIC", L"\u041d\u0435 \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u043e", WS_CHILD | WS_VISIBLE | SS_LEFT, 0, wh - 28, ww, 28, g_hMain, NULL, hi, NULL);
     SendMessage(g_hStatusTxt, WM_SETFONT, (WPARAM)g_fontTiny, TRUE);
+
     EnableWindow(g_hMsgInput, FALSE);
     EnableWindow(g_hSendBtn, FALSE);
     ShowWindow(g_hMain, show);
     UpdateWindow(g_hMain);
+
     MSG msg;
     while (GetMessage(&msg, NULL, 0, 0)) {
         if (msg.hwnd == g_hMsgInput && msg.message == WM_KEYDOWN && msg.wParam == VK_RETURN) {
@@ -774,13 +887,9 @@ int APIENTRY wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int show) {
         TranslateMessage(&msg);
         DispatchMessage(&msg);
     }
-    DeleteObject(g_hBrBg);
-    DeleteObject(g_hBrSidebar);
-    DeleteObject(g_hBrInput);
-    DeleteObject(g_fontMain);
-    DeleteObject(g_fontSec);
-    DeleteObject(g_fontTiny);
-    DeleteObject(g_fontBold);
-    DeleteObject(g_fontBtn);
+
+    DeleteObject(g_hBrBg); DeleteObject(g_hBrSidebar); DeleteObject(g_hBrInput);
+    DeleteObject(g_fontMain); DeleteObject(g_fontSec); DeleteObject(g_fontTiny);
+    DeleteObject(g_fontBold); DeleteObject(g_fontBtn);
     return (int)msg.wParam;
 }
