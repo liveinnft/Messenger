@@ -16,6 +16,7 @@ private:
     std::atomic<bool> connected;
     std::thread recvThread;
     std::function<void(const std::string&)> onMessageCallback;
+    std::atomic<bool> stopRequested;
 
     void receiveLoop();
 
