@@ -1,3 +1,0 @@
-/root/Messenger/Server/build/CMakeFiles/rebuild_cache.dir
-/root/Messenger/Server/build/CMakeFiles/edit_cache.dir
-/root/Messenger/Server/build/CMakeFiles/Server.dir
