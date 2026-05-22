@@ -13,7 +13,7 @@ void signalHandler(int sig) {
 }
 
 int main() {
-    int port = 8888;
+    int port = 8889;
 
     signal(SIGINT, signalHandler);
     signal(SIGTERM, signalHandler);

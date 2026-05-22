@@ -3,8 +3,8 @@
 
 #include <string>
 #include <vector>
-#include <map>
 #include <mutex>
+#include <sqlite3.h>
 
 struct Message {
     int id;
@@ -16,10 +16,12 @@ struct Message {
 
 class Database {
 private:
-    std::map<std::string, std::string> users;
-    std::vector<Message> messages;
-    int messageIdCounter;
+    sqlite3* db;
     std::mutex dbMutex;
+
+    bool executeSQL(const std::string& sql);
+    static int callbackSelectUsers(void* data, int argc, char** argv, char** azColName);
+    static int callbackSelectMessages(void* data, int argc, char** argv, char** azColName);
 
 public:
     Database();
@@ -33,4 +35,4 @@ public:
     std::vector<std::string> getUsers();
 };
 
-#endif 
+#endif

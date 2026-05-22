@@ -30,7 +30,7 @@ bool Server::start() {
     serverAddr.sin_port = htons(port);
 
     if (bind(serverSocket, (sockaddr*)&serverAddr, sizeof(serverAddr)) < 0) {
-        std::cerr << "Bind failed" << std::endl;
+        std::cerr << "Bind failed on port " << port << std::endl;
         return false;
     }
 
@@ -85,6 +85,9 @@ void Server::handleClient(int clientSocket) {
         }
 
         std::string message(buffer, bytesRead);
+        while (!message.empty() && (message.back() == '\r' || message.back() == '\n'))
+            message.pop_back();
+        std::cout << "Received: " << message << std::endl;
         processMessage(clientSocket, message);
     }
 
@@ -105,6 +108,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
     if (parts.empty()) return;
 
     Protocol::MessageType type = Protocol::stringToType(parts[0]);
+    std::cout << "Message type: " << type << " (" << parts[0] << ")" << std::endl;
 
     switch (type) {
     case Protocol::REGISTER: {
@@ -114,6 +118,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
                 Protocol::createMessage(Protocol::RESPONSE_OK, {}) :
                 Protocol::createMessage(Protocol::RESPONSE_ERROR, { "User already exists" });
             send(clientSocket, response.c_str(), (int)response.length(), 0);
+            std::cout << "Sent REGISTER response: " << response;
         }
         break;
     }
@@ -126,10 +131,11 @@ void Server::processMessage(int clientSocket, const std::string& message) {
                 clients[clientSocket] = parts[1];
                 std::string response = Protocol::createMessage(Protocol::RESPONSE_OK, {});
                 send(clientSocket, response.c_str(), (int)response.length(), 0);
-            }
-            else {
+                std::cout << "Sent LOGIN response OK: " << response;
+            } else {
                 std::string response = Protocol::createMessage(Protocol::RESPONSE_ERROR, { "Wrong username or password" });
                 send(clientSocket, response.c_str(), (int)response.length(), 0);
+                std::cout << "Sent LOGIN response ERROR: " << response;
             }
         }
         break;
@@ -139,6 +145,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
         auto users = db->getUsers();
         std::string response = Protocol::createMessage(Protocol::USER_LIST, users);
         send(clientSocket, response.c_str(), (int)response.length(), 0);
+        std::cout << "Sent USER_LIST with " << users.size() << " users" << std::endl;
         break;
     }
 
@@ -154,6 +161,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
             }
             std::string response = Protocol::createMessage(Protocol::MESSAGE_LIST, msgData);
             send(clientSocket, response.c_str(), (int)response.length(), 0);
+            std::cout << "Sent MESSAGE_LIST with " << messages.size() << " messages" << std::endl;
         }
         break;
     }
@@ -163,6 +171,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
             db->saveMessage(parts[1], parts[2], parts[3]);
             std::string response = Protocol::createMessage(Protocol::RESPONSE_OK, {});
             send(clientSocket, response.c_str(), (int)response.length(), 0);
+            std::cout << "Sent SEND_MSG response OK" << std::endl;
 
             std::string notification = Protocol::createMessage(Protocol::NEW_MESSAGE,
                 { parts[1], parts[2], parts[3] });
@@ -172,6 +181,7 @@ void Server::processMessage(int clientSocket, const std::string& message) {
     }
 
     default:
+        std::cout << "Unknown message type: " << parts[0] << std::endl;
         break;
     }
 }

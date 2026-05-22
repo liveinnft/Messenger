@@ -1,4 +1,4 @@
-﻿// Messenger Client - финальная версия с кнопкой обновления, автообновлением, прокруткой и исправленными сообщениями
+﻿// Messenger Client - полная версия с логированием входящих сообщений в net.log
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
@@ -56,7 +56,7 @@
 #define ID_SEND_BTN 105
 #define ID_CONNECT_BTN 106
 #define ID_DISCONNECT_BTN 107
-#define ID_REFRESH_BTN 108   // новая кнопка обновления
+#define ID_REFRESH_BTN 108
 
 #define IDC_EDIT_HOST      201
 #define IDC_EDIT_PORT      202
@@ -73,7 +73,6 @@ HWND g_hSearchBox = NULL, g_hStatusTxt = NULL, g_hConnectBtn = NULL, g_hDisconne
 
 HFONT g_fontMain = NULL, g_fontSec = NULL, g_fontTiny = NULL, g_fontBold = NULL, g_fontBtn = NULL;
 HBRUSH g_hBrBg = NULL, g_hBrSidebar = NULL, g_hBrInput = NULL;
-HPEN g_hPenBorder = NULL;
 
 int g_scrollPos = 0;
 int g_totalHeight = 0;
@@ -105,6 +104,20 @@ NetworkClient g_net;
 std::atomic<bool> g_authWaiting{ false };
 std::atomic<bool> g_authSuccess{ false };
 std::string g_authError;
+
+// Логирование
+void LogToFile(const std::string& msg) {
+    std::ofstream log("net.log", std::ios::app);
+    if (log) {
+        time_t now = time(NULL);
+        struct tm t;
+        localtime_s(&t, &now);
+        char buf[20];
+        strftime(buf, sizeof(buf), "%H:%M:%S", &t);
+        log << buf << " " << msg << std::endl;
+        log.close();
+    }
+}
 
 // ------------------------------------------------------------
 // Конфигурация с автовходом
@@ -226,7 +239,6 @@ void drawChatItem(DRAWITEMSTRUCT* dis) {
     HBRUSH br = CreateSolidBrush(sel ? RGB(50, 50, 60) : (hot ? RGB(40, 40, 48) : CLR_SIDEBAR));
     FillRect(dc, &rc, br);
     DeleteObject(br);
-    // Рисуем границу снизу
     HPEN pen = CreatePen(PS_SOLID, 1, CLR_DIVIDER);
     HPEN oldPen = (HPEN)SelectObject(dc, pen);
     MoveToEx(dc, rc.left, rc.bottom - 1, NULL);
@@ -262,7 +274,6 @@ void drawChatItem(DRAWITEMSTRUCT* dis) {
     if (lm.size() > 35) lm = lm.substr(0, 35) + L"...";
     DrawText(dc, lm.c_str(), -1, &mr, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_WORD_ELL);
 
-    // Время и непрочитанные
     int rightEdge = rc.right - 12;
     if (!u.lastTime.empty()) {
         RECT tr = rc;
@@ -272,7 +283,6 @@ void drawChatItem(DRAWITEMSTRUCT* dis) {
         DrawText(dc, s2w(u.lastTime).c_str(), -1, &tr, DT_RIGHT | DT_TOP | DT_SINGLELINE);
         rightEdge = tr.left - 8;
     }
-    // Рисуем непрочитанные
     if (u.unreadCount > 0) {
         std::wstring unreadStr = std::to_wstring(u.unreadCount);
         SIZE sz;
@@ -292,11 +302,69 @@ void drawChatItem(DRAWITEMSTRUCT* dis) {
     SelectObject(dc, oldF);
 }
 
+// ------------------------------------------------------------
+// Функции для работы с прокруткой
+// ------------------------------------------------------------
+void RecalcScrollRange() {
+    if (g_messages.empty()) {
+        g_totalHeight = 0;
+        SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE, 0, 0, 0 };
+        SetScrollInfo(g_hMsgView, SB_VERT, &si, TRUE);
+        return;
+    }
+    RECT rc;
+    GetClientRect(g_hMsgView, &rc);
+    int clientHeight = rc.bottom - rc.top;
+    const int GAP = 4;
+    HDC dc = GetDC(g_hMsgView);
+    int y = 8;
+    for (size_t idx = 0; idx < g_messages.size(); idx++) {
+        ChatMsg& msg = g_messages[idx];
+        std::wstring wtext = s2w(msg.text);
+        std::wstring wtime = s2w(msg.time);
+        if (wtext.length() > 500) wtext = wtext.substr(0, 500);
+        if (wtime.length() > 15) wtime = wtime.substr(0, 15);
+        RECT trc0 = { 0, 0, MSG_MAX_W - MSG_BUBBLE_PAD_X * 2, 2000 };
+        DrawText(dc, wtext.c_str(), -1, &trc0, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
+        int textH = trc0.bottom - trc0.top;
+        int textW = trc0.right - trc0.left;
+        SIZE ts;
+        GetTextExtentPoint32(dc, wtime.c_str(), (int)wtime.length(), &ts);
+        int timeW = ts.cx + 6;
+        int bubbleH = max(textH + MSG_BUBBLE_PAD_Y * 2 + 4, 40);
+        y += bubbleH + GAP;
+    }
+    g_totalHeight = y - GAP + 8;
+    ReleaseDC(g_hMsgView, dc);
+    SCROLLINFO si = { sizeof(SCROLLINFO), SIF_RANGE | SIF_PAGE, 0, g_totalHeight, clientHeight };
+    SetScrollInfo(g_hMsgView, SB_VERT, &si, TRUE);
+    int maxScroll = g_totalHeight - clientHeight;
+    if (maxScroll < 0) maxScroll = 0;
+    if (g_scrollPos > maxScroll) g_scrollPos = maxScroll;
+    SetScrollPos(g_hMsgView, SB_VERT, g_scrollPos, TRUE);
+}
+
+void ScrollToBottom() {
+    if (g_messages.empty()) return;
+    RECT rc;
+    GetClientRect(g_hMsgView, &rc);
+    int clientHeight = rc.bottom - rc.top;
+    int maxScroll = g_totalHeight - clientHeight;
+    if (maxScroll < 0) maxScroll = 0;
+    if (g_scrollPos != maxScroll) {
+        g_scrollPos = maxScroll;
+        SetScrollPos(g_hMsgView, SB_VERT, g_scrollPos, TRUE);
+        InvalidateRect(g_hMsgView, NULL, FALSE);
+    }
+}
+
+// ------------------------------------------------------------
+// Отрисовка сообщений (сверху вниз)
+// ------------------------------------------------------------
 void drawMsgView(HDC dc, RECT rc) {
     HBRUSH brBg = CreateSolidBrush(CLR_CHAT_BG);
     FillRect(dc, &rc, brBg);
     DeleteObject(brBg);
-
     if (g_messages.empty()) {
         SetBkMode(dc, TRANSPARENT);
         HFONT oldF = (HFONT)SelectObject(dc, g_fontMain);
@@ -306,50 +374,16 @@ void drawMsgView(HDC dc, RECT rc) {
         SelectObject(dc, oldF);
         g_totalHeight = 0;
         g_scrollPos = 0;
-        SetScrollRange(g_hMsgView, SB_VERT, 0, 0, TRUE);
         return;
     }
-
     if (g_totalHeight == 0) {
-        int y = rc.bottom - 8;
-        const int GAP = 4;
-        for (int idx = (int)g_messages.size() - 1; idx >= 0; idx--) {
-            ChatMsg& msg = g_messages[idx];
-            std::wstring wtext = s2w(msg.text);
-            std::wstring wtime = s2w(msg.time);
-            if (wtext.length() > 500) wtext = wtext.substr(0, 500);
-            if (wtime.length() > 15) wtime = wtime.substr(0, 15);
-            RECT trc0 = { 0, 0, MSG_MAX_W - MSG_BUBBLE_PAD_X * 2, 2000 };
-            DrawText(dc, wtext.c_str(), -1, &trc0, DT_LEFT | DT_TOP | DT_WORDBREAK | DT_CALCRECT);
-            int textH = trc0.bottom - trc0.top;
-            int textW = trc0.right - trc0.left;
-            SIZE ts;
-            GetTextExtentPoint32(dc, wtime.c_str(), (int)wtime.length(), &ts);
-            int timeW = ts.cx + 6;
-            int bubbleW = min(textW + MSG_BUBBLE_PAD_X * 2 + timeW + 8, MSG_MAX_W);
-            int bubbleH = max(textH + MSG_BUBBLE_PAD_Y * 2 + 4, 40);
-            y -= (bubbleH + GAP);
-        }
-        g_totalHeight = rc.bottom - 8 - y;
-        SCROLLINFO si;
-        si.cbSize = sizeof(SCROLLINFO);
-        si.fMask = SIF_RANGE | SIF_PAGE;
-        si.nMin = 0;
-        si.nMax = g_totalHeight;
-        si.nPage = (UINT)(rc.bottom - rc.top - 8);
-        SetScrollInfo(g_hMsgView, SB_VERT, &si, TRUE);
-        int maxScroll = g_totalHeight - (int)si.nPage;
-        if (maxScroll < 0) maxScroll = 0;
-        if (g_scrollPos > maxScroll) g_scrollPos = maxScroll;
-        if (g_scrollPos < 0) g_scrollPos = 0;
-        SetScrollPos(g_hMsgView, SB_VERT, g_scrollPos, TRUE);
+        RecalcScrollRange();
+        ScrollToBottom();
     }
-
     HFONT oldF = (HFONT)SelectObject(dc, g_fontMain);
-    int startY = rc.bottom - 8 - g_scrollPos;
-    int y = startY;
     const int GAP = 4;
-    for (int idx = (int)g_messages.size() - 1; idx >= 0 && y > rc.top + 8; idx--) {
+    int y = 8 - g_scrollPos;
+    for (size_t idx = 0; idx < g_messages.size(); idx++) {
         ChatMsg& msg = g_messages[idx];
         std::wstring wtext = s2w(msg.text);
         std::wstring wtime = s2w(msg.time);
@@ -365,41 +399,41 @@ void drawMsgView(HDC dc, RECT rc) {
         int bubbleW = min(textW + MSG_BUBBLE_PAD_X * 2 + timeW + 8, MSG_MAX_W);
         int bubbleH = max(textH + MSG_BUBBLE_PAD_Y * 2 + 4, 40);
         RECT brc = rc;
-        brc.bottom = y;
-        brc.top = y - bubbleH;
-        if (msg.isSelf) {
-            brc.left = rc.right - bubbleW - 12;
-            brc.right = rc.right - 12;
+        brc.top = y;
+        brc.bottom = y + bubbleH;
+        if (brc.bottom > rc.top && brc.top < rc.bottom) {
+            if (msg.isSelf) {
+                brc.left = rc.right - bubbleW - 12;
+                brc.right = rc.right - 12;
+            }
+            else {
+                brc.left = rc.left + 12;
+                brc.right = rc.left + bubbleW + 12;
+            }
+            COLORREF bubbleFill = msg.isSelf ? CLR_BUBBLE_SELF : CLR_BUBBLE_OTHER;
+            HRGN rgn = CreateRoundRectRgn(brc.left, brc.top, brc.right + 1, brc.bottom + 1, MSG_BUBBLE_RAD, MSG_BUBBLE_RAD);
+            HBRUSH br = CreateSolidBrush(bubbleFill);
+            FillRgn(dc, rgn, br);
+            DeleteObject(rgn);
+            DeleteObject(br);
+            SetBkMode(dc, TRANSPARENT);
+            SetTextColor(dc, RGB(255, 255, 255));
+            RECT txtR = brc;
+            txtR.left += MSG_BUBBLE_PAD_X;
+            txtR.top += MSG_BUBBLE_PAD_Y;
+            txtR.right -= MSG_BUBBLE_PAD_X + timeW + 4;
+            txtR.bottom -= MSG_BUBBLE_PAD_Y;
+            DrawText(dc, wtext.c_str(), -1, &txtR, DT_LEFT | DT_TOP | DT_WORDBREAK);
+            RECT tmR = brc;
+            tmR.left = tmR.right - timeW - MSG_BUBBLE_PAD_X;
+            tmR.top = tmR.bottom - MSG_BUBBLE_PAD_Y - ts.cy - 2;
+            SetTextColor(dc, RGB(180, 180, 190));
+            SelectObject(dc, g_fontSec);
+            DrawText(dc, wtime.c_str(), -1, &tmR, DT_RIGHT | DT_BOTTOM | DT_SINGLELINE);
+            SelectObject(dc, g_fontMain);
         }
-        else {
-            brc.left = rc.left + 12;
-            brc.right = rc.left + bubbleW + 12;
-        }
-        COLORREF bubbleFill = msg.isSelf ? CLR_BUBBLE_SELF : CLR_BUBBLE_OTHER;
-        HRGN rgn = CreateRoundRectRgn(brc.left, brc.top, brc.right + 1, brc.bottom + 1, MSG_BUBBLE_RAD, MSG_BUBBLE_RAD);
-        HBRUSH br = CreateSolidBrush(bubbleFill);
-        FillRgn(dc, rgn, br);
-        DeleteObject(rgn);
-        DeleteObject(br);
-
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(255, 255, 255));
-
-        RECT txtR = brc;
-        txtR.left += MSG_BUBBLE_PAD_X;
-        txtR.top += MSG_BUBBLE_PAD_Y;
-        txtR.right -= MSG_BUBBLE_PAD_X + timeW + 4;
-        txtR.bottom -= MSG_BUBBLE_PAD_Y;
-        DrawText(dc, wtext.c_str(), -1, &txtR, DT_LEFT | DT_TOP | DT_WORDBREAK);
-
-        RECT tmR = brc;
-        tmR.left = tmR.right - timeW - MSG_BUBBLE_PAD_X;
-        tmR.top = tmR.bottom - MSG_BUBBLE_PAD_Y - ts.cy - 2;
-        SetTextColor(dc, RGB(180, 180, 190));
-        SelectObject(dc, g_fontSec);
-        DrawText(dc, wtime.c_str(), -1, &tmR, DT_RIGHT | DT_BOTTOM | DT_SINGLELINE);
-        SelectObject(dc, g_fontMain);
-        y = brc.top - GAP;
+        y += bubbleH + GAP;
+        if (y > rc.bottom + 500) break;
     }
     SelectObject(dc, oldF);
 }
@@ -410,7 +444,6 @@ void drawChatHeader(HWND hWnd, HDC dc) {
     HBRUSH br = CreateSolidBrush(CLR_HEADER);
     FillRect(dc, &rc, br);
     DeleteObject(br);
-    // Нижняя граница
     HPEN pen = CreatePen(PS_SOLID, 1, CLR_DIVIDER);
     HPEN oldPen = (HPEN)SelectObject(dc, pen);
     MoveToEx(dc, rc.left, rc.bottom - 1, NULL);
@@ -465,6 +498,7 @@ void drawChatHeader(HWND hWnd, HDC dc) {
 struct SrvMsg { std::string raw; SrvMsg(const std::string& s) : raw(s) {} };
 
 void onSrvMsg(const std::string& raw) {
+    LogToFile("IN: " + raw);
     SrvMsg* m = new SrvMsg(raw);
     PostMessage(g_hMain, WM_SERVER_MSG, 0, (LPARAM)m);
 }
@@ -477,6 +511,7 @@ std::string extractTime(const std::string& datetime) {
 }
 
 void handleSrvMsg(const std::string& raw) {
+    LogToFile("handleSrvMsg: " + raw);
     std::string clean = raw;
     while (!clean.empty() && (clean.back() == '\r' || clean.back() == '\n' || clean.back() == ' '))
         clean.pop_back();
@@ -488,16 +523,19 @@ void handleSrvMsg(const std::string& raw) {
         if (t == Protocol::RESPONSE_OK) {
             g_authSuccess = true;
             g_authWaiting = false;
+            LogToFile("Auth OK");
         }
         else if (t == Protocol::RESPONSE_ERROR) {
             g_authSuccess = false;
             g_authError = (parts.size() >= 2) ? parts[1] : "Unknown error";
             g_authWaiting = false;
+            LogToFile("Auth ERROR: " + g_authError);
         }
         return;
     }
 
     if (t == Protocol::USER_LIST) {
+        LogToFile("USER_LIST received");
         g_allUsers.clear();
         for (size_t i = 1; i < parts.size(); i++) {
             if (!parts[i].empty() && parts[i] != g_currentUser) {
@@ -515,9 +553,9 @@ void handleSrvMsg(const std::string& raw) {
         for (size_t i = 0; i < g_filteredUsers.size(); i++)
             SendMessage(g_hChatList, LB_ADDSTRING, 0, (LPARAM)s2w(g_filteredUsers[i].name).c_str());
         InvalidateRect(g_hChatList, NULL, FALSE);
-        g_totalHeight = 0; // пересчитать высоту при новых сообщениях
     }
     else if (t == Protocol::MESSAGE_LIST) {
+        LogToFile("MESSAGE_LIST received, count=" + std::to_string((parts.size() - 1) / 4));
         g_messages.clear();
         for (size_t i = 1; i + 3 < parts.size(); i += 4) {
             ChatMsg m;
@@ -528,9 +566,12 @@ void handleSrvMsg(const std::string& raw) {
             g_messages.push_back(m);
         }
         g_totalHeight = 0;
+        RecalcScrollRange();
+        ScrollToBottom();
         InvalidateRect(g_hMsgView, NULL, FALSE);
     }
     else if (t == Protocol::NEW_MESSAGE) {
+        LogToFile("NEW_MESSAGE received");
         if (parts.size() >= 4) {
             std::string sender = parts[1];
             std::string text = parts[3];
@@ -542,7 +583,6 @@ void handleSrvMsg(const std::string& raw) {
             m.time = time;
             m.isSelf = isSelf;
             g_messages.push_back(m);
-
             for (auto& u : g_allUsers) {
                 if (u.name == sender) {
                     u.lastMsg = text;
@@ -562,7 +602,8 @@ void handleSrvMsg(const std::string& raw) {
                 }
             }
             g_filteredUsers = g_allUsers;
-            g_totalHeight = 0;
+            RecalcScrollRange();
+            ScrollToBottom();
             InvalidateRect(g_hMsgView, NULL, FALSE);
             InvalidateRect(g_hChatList, NULL, FALSE);
         }
@@ -608,7 +649,8 @@ void sendMsg(const std::string& text) {
             }
         }
         g_filteredUsers = g_allUsers;
-        g_totalHeight = 0;
+        RecalcScrollRange();
+        ScrollToBottom();
         InvalidateRect(g_hMsgView, NULL, FALSE);
         InvalidateRect(g_hChatList, NULL, FALSE);
     }
@@ -834,7 +876,7 @@ bool PerformAuth(HWND hParent, const LoginData& ld) {
     cfg.autoLogin = true;
     SaveConfig(cfg);
 
-    SetTimer(g_hMain, 1, 5000, NULL); // автообновление каждые 5 секунд
+    SetTimer(g_hMain, 1, 5000, NULL);
     return true;
 }
 
@@ -879,10 +921,10 @@ LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
                 }
                 g_filteredUsers = g_allUsers;
                 g_totalHeight = 0;
+                if (g_loggedIn) reqHist(g_currentChat);
                 InvalidateRect(g_hChatList, NULL, FALSE);
                 InvalidateRect(g_hMsgView, NULL, FALSE);
                 InvalidateRect(g_hChatHeader, NULL, FALSE);
-                if (g_loggedIn) reqHist(g_currentChat);
             }
             return 0;
         }
