@@ -30,7 +30,7 @@ bool NetworkClient::connectToServer(const std::string& host, int port) {
     sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock == INVALID_SOCKET) return false;
 
-    // Увеличиваем таймауты до 15 секунд
+    //таймаут 15 секунд
     DWORD timeout = 15000;
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
@@ -38,7 +38,7 @@ bool NetworkClient::connectToServer(const std::string& host, int port) {
     int nodelay = 1;
     setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, (const char*)&nodelay, sizeof(nodelay));
 
-    // Увеличиваем буфер отправки (опционально)
+
     int sendBuf = 65536;
     setsockopt(sock, SOL_SOCKET, SO_SNDBUF, (const char*)&sendBuf, sizeof(sendBuf));
 
@@ -122,7 +122,7 @@ bool NetworkClient::sendMessage(const std::string& message) {
                 continue;
             }
             else if (err == WSAECONNRESET || err == WSAECONNABORTED) {
-                // Соединение разорвано
+                
                 connected = false;
                 return false;
             }
