@@ -1,4 +1,4 @@
-// Messenger Client - полная версия с логированием входящих сообщений в net.log
+
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
@@ -19,7 +19,7 @@
 #define DT_WORD_ELL 0x00040000L
 #define ODS_HOT_CUSTOM 0x00000040L
 
-// Цвета
+// цвета
 #define CLR_BG RGB(26, 26, 30)
 #define CLR_SIDEBAR RGB(30, 30, 34)
 #define CLR_CHAT_BG RGB(30, 30, 34)
@@ -107,7 +107,7 @@ std::atomic<bool> g_authWaiting{ false };
 std::atomic<bool> g_authSuccess{ false };
 std::string g_authError;
 
-// Логирование
+// логи
 void LogToFile(const std::string& msg) {
     std::ofstream log("net.log", std::ios::app);
     if (log) {
@@ -121,9 +121,6 @@ void LogToFile(const std::string& msg) {
     }
 }
 
-// ------------------------------------------------------------
-// Конфигурация с автовходом
-// ------------------------------------------------------------
 struct AppConfig {
     std::string lastHost;
     int lastPort;
@@ -167,9 +164,7 @@ AppConfig LoadConfig() {
     return cfg;
 }
 
-// ------------------------------------------------------------
-// Вспомогательные функции
-// ------------------------------------------------------------
+
 std::string curTime() {
     time_t n = time(NULL);
     struct tm t;
@@ -218,9 +213,7 @@ COLORREF GetAvatarColor(const std::string& name) {
     return RGB(r, g, b);
 }
 
-// ------------------------------------------------------------
-// Графика
-// ------------------------------------------------------------
+
 void drawEllipse2(HDC dc, int cx, int cy, int rx, int ry, COLORREF fill) {
     HRGN rgn = CreateEllipticRgn(cx - rx, cy - ry, cx + rx, cy + ry);
     HBRUSH br = CreateSolidBrush(fill);
@@ -304,9 +297,7 @@ void drawChatItem(DRAWITEMSTRUCT* dis) {
     SelectObject(dc, oldF);
 }
 
-// ------------------------------------------------------------
-// Функции для работы с прокруткой
-// ------------------------------------------------------------
+//прокрутка
 void RecalcScrollRange() {
     if (g_messages.empty()) {
         g_totalHeight = 0;
@@ -360,9 +351,7 @@ void ScrollToBottom() {
     }
 }
 
-// ------------------------------------------------------------
-// Отрисовка сообщений (сверху вниз)
-// ------------------------------------------------------------
+//соо
 void drawMsgView(HDC dc, RECT rc) {
     HBRUSH brBg = CreateSolidBrush(CLR_CHAT_BG);
     FillRect(dc, &rc, brBg);
@@ -494,9 +483,7 @@ void drawChatHeader(HWND hWnd, HDC dc) {
     SelectObject(dc, oldF);
 }
 
-// ------------------------------------------------------------
-// Сетевые сообщения и обновление данных
-// ------------------------------------------------------------
+//обнов
 struct SrvMsg { std::string raw; SrvMsg(const std::string& s) : raw(s) {} };
 
 void onSrvMsg(const std::string& raw) {
@@ -679,9 +666,7 @@ void disconnect() {
     KillTimer(g_hMain, 1);
 }
 
-// ------------------------------------------------------------
-// Диалог входа (без изменений)
-// ------------------------------------------------------------
+
 struct LoginData { std::string host; int port; std::string user, pass; bool doReg; };
 LoginData g_ld;
 bool g_loginDialogResult = false;
@@ -805,9 +790,7 @@ bool ShowLoginDialog(HWND hParent) {
     return g_loginDialogResult;
 }
 
-// ------------------------------------------------------------
-// Аутентификация
-// ------------------------------------------------------------
+//вход
 bool SendAndWait(const std::string& cmd, int timeoutSec = 30) {
     if (!g_net.sendMessage(cmd)) return false;
     g_authWaiting = true;
@@ -887,9 +870,7 @@ void doConnect(HWND hParent) {
     PerformAuth(hParent, g_ld);
 }
 
-// ------------------------------------------------------------
-// Обработчики окон
-// ------------------------------------------------------------
+//окна обработчик
 LRESULT CALLBACK SidebarProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     if (m == WM_CTLCOLORLISTBOX) {
         HDC dc = (HDC)wp;
@@ -1081,10 +1062,7 @@ LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM wp, LPARAM lp) {
     }
     return DefWindowProc(h, m, wp, lp);
 }
-
-// ------------------------------------------------------------
-// Автовход при запуске
-// ------------------------------------------------------------
+//автовход
 void TryAutoLogin() {
     AppConfig cfg = LoadConfig();
     if (cfg.autoLogin && !cfg.lastUsername.empty() && !cfg.lastPassword.empty()) {
@@ -1098,9 +1076,7 @@ void TryAutoLogin() {
     }
 }
 
-// ------------------------------------------------------------
-// Точка входа
-// ------------------------------------------------------------
+
 int APIENTRY wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int show) {
     g_hInst = hi;
     SetProcessDPIAware();
