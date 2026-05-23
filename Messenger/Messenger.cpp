@@ -1,4 +1,4 @@
-﻿// Messenger Client - полная версия с логированием входящих сообщений в net.log
+// Messenger Client - полная версия с логированием входящих сообщений в net.log
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <commctrl.h>
@@ -12,6 +12,8 @@
 #include <cctype>
 #include "network.h"
 #include "protocol.h"
+#include <shellscalingapi.h>
+#pragma comment(lib, "shcore.lib")
 #pragma comment(lib, "comctl32.lib")
 
 #define DT_WORD_ELL 0x00040000L
@@ -1101,6 +1103,7 @@ void TryAutoLogin() {
 // ------------------------------------------------------------
 int APIENTRY wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR, int show) {
     g_hInst = hi;
+    SetProcessDPIAware();
     g_hBrBg = CreateSolidBrush(CLR_BG);
     g_hBrSidebar = CreateSolidBrush(CLR_SIDEBAR);
     g_hBrInput = CreateSolidBrush(CLR_INPUT_BG);
